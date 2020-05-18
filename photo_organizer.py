@@ -8,10 +8,13 @@ import json
 import pprint
 import shutil
 import argparse
+import logging
 import subprocess
 
 KNOWN_EXT = [".jpg", ".mov", ".mp4", ".mts", ".heic"]
 DB_FILENAME = "photo_index.db"
+
+logger = logging.getLogger(__name__)
 
 def get_size(file_path):
     return str(os.path.getsize(file_path))
@@ -55,31 +58,50 @@ def get_created_date_time_as_one(file_path):
     return d + "_" + t.replace(":", "-")
 
 def check_same_md5(now, file_list):
-    print("Get md5 - %s" % now)
     now_md5 = get_md5(now)
 
     for f in file_list:
-        print("Get md5 - %s" % f)
         if now_md5 == get_md5(f):
+            logger.debug(" MD5 match")
             return f
 
+    logger.debug(" MD5 mismatch")
     return False
         
 def _copy_file(origin, new):
     try:
-        print("origin :%s\nnew :%s" % (origin, new))
         shutil.copy(origin, new)
     except IOError as io_err:
         os.makedirs(os.path.dirname(new))
         shutil.copy(origin, new)
 
+def get_unduplicated_filename(base, filename):
+    name, extension = os.path.splitext(filename)
+    i = 1
+    while True:
+        temp_filepath = "%s/%s_duplicated_%d.%s" % (base, name, i, extension)
+        if os.path.exists(temp_filepath):
+            logger.debug("  Duplicated %s" % temp_filepath)
+            continue
+        else:
+            logger.debug("  New filename : %s" % temp_filepath)
+            return temp_filepath
+        i += 1
+
+
 def copy_file(target_path, date_time, file_path):
     new_base_path = get_base_path(date_time.split('_')[0])
     filename = os.path.basename(file_path)
     new_path = os.path.join(target_path, new_base_path, filename)
-    print("Fake copy %s -> %s" % (file_path, new_path), flush=True)
-    #_copy_file(f, new_path)
 
+    if os.path.exists(new_path):
+        logger.debug(" copy_file(): File already exists(%s). so rename current file(%s)" % (new_path, file_path))
+        new_path = get_unduplicated_filename(os.path.join(target_path, new_base_path), filename)
+
+    _copy_file(file_path, new_path)
+    logger.debug(" copy_file() : %s -> %s" % (file_path, new_path))
+
+    return new_path
 
 def progress(total, count, suffix=''):
     bar_len = 40
@@ -103,13 +125,15 @@ def create_file_index_db(path):
 
         count += 1
         progress(total, count, f)
+        logger.debug("Create Index DB: %s" % f)
+
         if os.path.isdir(f):
             continue
 
         filename, file_extension = os.path.splitext(f)
 
         if file_extension.lower() not in KNOWN_EXT:
-            print("Skip by extension : %s" % f)
+            logger.debug(" Skip by extension : %s" % f)
             continue
 
         # First key : date/time
@@ -139,8 +163,24 @@ def main():
                         help="Target path - Photo Copy to path")
     parser.add_argument('--index_db',
                         help="Load index db for target path(skip indexing target path)")
+    parser.add_argument('--logfile',
+                        help="logfile for detail progress")
 
     args = parser.parse_args()
+
+    logger.setLevel(logging.DEBUG)
+    formatter = logging.Formatter('%(asctime)s:%(levelname)s:%(message)s', '%Y-%m-%d %H:%M:%S')
+
+    console_handler = logging.StreamHandler()
+    console_handler.setLevel(logging.INFO)
+    console_handler.setFormatter(formatter)
+    logger.addHandler(console_handler)
+
+    if args.logfile:
+        file_debug_handler = logging.FileHandler(args.logfile)
+        file_debug_handler.setLevel(logging.DEBUG)
+        file_debug_handler.setFormatter(formatter)
+        logger.addHandler(file_debug_handler)
 
     source_path = os.path.abspath(os.path.expanduser(args.source))
     target_path = os.path.abspath(os.path.expanduser(args.target))
@@ -148,21 +188,21 @@ def main():
     target = False
     if args.index_db:
 
-        print("Load Index DB instead of lookup target path")
+        logger.info("Load Index DB instead of lookup target path")
         index_db = os.path.abspath(os.path.expanduser(args.index_db))
         if os.path.exists(index_db):
             with open(index_db, 'r') as fp:
                 target = json.load(fp)
-                print("Load Index DB success")
+                logger.info("Load Index DB success")
         else:
-            print(" => Index DB not exists, will be save later")
+            logger.info(" => Index DB not exists, will be save later")
 
     if target == False:
-        print("Checking size/datetime in Target path folder (%s)" % target_path, flush=True)
+        logger.info("Creating DB with size/datetime for Target folder (%s)" % target_path)
         target = create_file_index_db(target_path + "/**/*")
-        print("\n\n")
+        logger.info("\n\n")
 
-    print("Check and Copy source path to target path(%s -> %s)" % (source_path, target_path), flush=True)
+    logger.info("Check and Copy source path to target path(%s -> %s)" % (source_path, target_path))
 
     file_list = glob.glob(source_path + "/**/*", recursive=True)
 
@@ -180,6 +220,8 @@ def main():
 
         count += 1
         progress(total, count, f)
+        logger.debug("")
+        logger.debug("Current File : %s" % f)
         if os.path.isdir(f):
             static["dir"] += 1
             continue
@@ -187,7 +229,7 @@ def main():
         filename, file_extension = os.path.splitext(f)
 
         if file_extension.lower() not in KNOWN_EXT:
-            #print("Skip by extension : %s" % f)
+            logger.debug("Skip by extension : %s" % f)
             static["skip"] += 1
             continue
 
@@ -201,36 +243,38 @@ def main():
             if size in target[dt]:
 
                 same_file = check_same_md5(f, target[dt][size])
+
                 if same_file:
-                    print("Target path file already exists", flush=True)
-                    print("Source %s - (%s)" % (f, size), flush=True)
-                    print("Target %s - (%s)" % (same_file, size), flush=True)
+                    logger.debug(" The same target file already exists")
+                    logger.debug("  Source %s - (%s)" % (f, size))
+                    logger.debug("  Target %s - (%s)" % (same_file, size))
                     static["dup_file"] += 1
                 else:
-                    print("alreay in db")
-                    target[dt][size].append(f)
+                    logger.debug(" New file(case3 - the same datetime/size index exists case)")
 
-                    copy_file(target_path, dt, f)
+                    new_file = copy_file(target_path, dt, f)
+                    target[dt][size].append(new_file)
                     static["new_file"] += 1
+
             else:
-                target[dt][size] = [f]
-
-                copy_file(target_path, dt, f)
+                logger.debug(" New file(case2 - the same datetime index exists case)")
+                new_file = copy_file(target_path, dt, f)
+                target[dt][size] = [new_file]
                 static["new_file"] += 1
-
         else:
+            logger.debug(" New file(case1 - No same datetime exists)")
+            new_file = copy_file(target_path, dt, f)
             target[dt] = {}
-            target[dt][size] = [f]
-
-            copy_file(target_path, dt, f)
+            target[dt][size] = [new_file]
             static["new_file"] += 1
 
-    print("\n\nSource Statistics")
-    print(" - Total : %d" % static["total"])
-    print(" - Directory : %d" % static["dir"])
-    print(" - Skip by file extension : %d" % static["skip"])
-    print(" - Duplicated files : %d" % static["dup_file"])
-    print(" - New files(Copied files) : %d" % static["new_file"])
+    logger.info("")
+    logger.info("Source Statistics")
+    logger.info(" - Total : %d" % static["total"])
+    logger.info(" - Directory : %d" % static["dir"])
+    logger.info(" - Skip by file extension : %d" % static["skip"])
+    logger.info(" - Duplicated files : %d" % static["dup_file"])
+    logger.info(" - New files(Copied files) : %d" % static["new_file"])
 
     if args.index_db:
         with open(index_db, 'w') as fp:
