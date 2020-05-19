@@ -77,8 +77,9 @@ def _copy_file(origin, new):
 
 def get_unduplicated_filename(base, filename):
     name, extension = os.path.splitext(filename)
-    i = 1
+    i = 0
     while True:
+        i += 1
         temp_filepath = "%s/%s_duplicated_%d%s" % (base, name, i, extension)
         if os.path.exists(temp_filepath):
             logger.debug("  Duplicated %s" % temp_filepath)
@@ -86,7 +87,6 @@ def get_unduplicated_filename(base, filename):
         else:
             logger.debug("  New filename : %s" % temp_filepath)
             return temp_filepath
-        i += 1
 
 
 def copy_file(target_path, date_time, file_path):
