@@ -79,7 +79,7 @@ def get_unduplicated_filename(base, filename):
     name, extension = os.path.splitext(filename)
     i = 1
     while True:
-        temp_filepath = "%s/%s_duplicated_%d.%s" % (base, name, i, extension)
+        temp_filepath = "%s/%s_duplicated_%d%s" % (base, name, i, extension)
         if os.path.exists(temp_filepath):
             logger.debug("  Duplicated %s" % temp_filepath)
             continue
