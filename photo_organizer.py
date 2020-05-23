@@ -68,12 +68,18 @@ def check_same_md5(now, file_list):
     logger.debug(" MD5 mismatch")
     return False
         
-def _copy_file(origin, new):
+def _copy_file(origin, new, remove):
     try:
-        shutil.copy(origin, new)
+        if remove:
+            shutil.move(origin, new)
+        else:
+            shutil.copy(origin, new)
     except IOError as io_err:
         os.makedirs(os.path.dirname(new))
-        shutil.copy(origin, new)
+        if remove:
+            shutil.move(origin, new)
+        else:
+            shutil.copy(origin, new)
 
 def get_unduplicated_filename(base, filename):
     name, extension = os.path.splitext(filename)
@@ -89,7 +95,7 @@ def get_unduplicated_filename(base, filename):
             return temp_filepath
 
 
-def copy_file(target_path, date_time, file_path):
+def copy_file(target_path, date_time, file_path, remove=False):
     new_base_path = get_base_path(date_time.split('_')[0])
     filename = os.path.basename(file_path)
     new_path = os.path.join(target_path, new_base_path, filename)
@@ -98,8 +104,10 @@ def copy_file(target_path, date_time, file_path):
         logger.debug(" copy_file(): File already exists(%s). so rename current file(%s)" % (new_path, file_path))
         new_path = get_unduplicated_filename(os.path.join(target_path, new_base_path), filename)
 
-    _copy_file(file_path, new_path)
+    _copy_file(file_path, new_path, remove)
     logger.debug(" copy_file() : %s -> %s" % (file_path, new_path))
+    if remove:
+        logger.debug("  %s was removed" % file_path)
 
     return new_path
 
@@ -161,6 +169,8 @@ def main():
                         help="Source path - Photo From path")
     parser.add_argument('-t', '--target', required=True,
                         help="Target path - Photo Copy to path")
+    parser.add_argument('-r', '--remove_source', default=False, action="store_true",
+                        help="Remove source file after file copied")
     parser.add_argument('--index_db',
                         help="Load index db for target path(skip indexing target path)")
     parser.add_argument('--logfile',
@@ -175,6 +185,11 @@ def main():
     console_handler.setLevel(logging.INFO)
     console_handler.setFormatter(formatter)
     logger.addHandler(console_handler)
+
+    if args.remove_source:
+        remove = True
+    else:
+        remove = False
 
     if args.logfile:
         file_debug_handler = logging.FileHandler(args.logfile)
@@ -248,22 +263,25 @@ def main():
                     logger.debug(" The same target file already exists")
                     logger.debug("  Source %s - (%s)" % (f, size))
                     logger.debug("  Target %s - (%s)" % (same_file, size))
+                    if remove:
+                        logger.debug("   Source %s removed" % f)
+                        os.remove(f)
                     static["dup_file"] += 1
                 else:
                     logger.debug(" New file(case3 - the same datetime/size index exists case)")
 
-                    new_file = copy_file(target_path, dt, f)
+                    new_file = copy_file(target_path, dt, f, remove)
                     target[dt][size].append(new_file)
                     static["new_file"] += 1
 
             else:
                 logger.debug(" New file(case2 - the same datetime index exists case)")
-                new_file = copy_file(target_path, dt, f)
+                new_file = copy_file(target_path, dt, f, remove)
                 target[dt][size] = [new_file]
                 static["new_file"] += 1
         else:
             logger.debug(" New file(case1 - No same datetime exists)")
-            new_file = copy_file(target_path, dt, f)
+            new_file = copy_file(target_path, dt, f, remove)
             target[dt] = {}
             target[dt][size] = [new_file]
             static["new_file"] += 1
